@@ -8,3 +8,9 @@
 ## PCB Layout
 
 ![PCB](kicad/pcb.png)
+
+## 3D Rendering
+
+![Rendering 1](img/rendering1.png)
+![Rendering 2](img/rendering2.png)
+![Rendering 3](img/rendering3.png)
