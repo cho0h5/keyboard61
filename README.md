@@ -16,3 +16,7 @@
 ![Rendering 3](img/rendering3.png)
 ![Rendering 4](img/rendering4.png)
 ![Rendering 5](img/rendering5.png)
+
+### 3D Models Used
+- Cherry MX Switch: [ConstantinoSchillebeeckx/cherry-mx-switch](https://github.com/ConstantinoSchillebeeckx/cherry-mx-switch)
+- DSA Keycap: [anhthang/dsa-keycap](https://github.com/anhthang/dsa-keycap)
