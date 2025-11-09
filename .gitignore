@@ -27,3 +27,4 @@ _autosave-*
 # Custom
 .DS_Store
 *.lck
+keyboard-backups
