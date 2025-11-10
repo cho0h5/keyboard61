@@ -22,9 +22,9 @@ _autosave-*
 
 # Exported BOM files
 *.xml
-*.csv
 
 # Custom
 .DS_Store
 *.lck
-keyboard-backups
+keyboard-backups/
+backups/
