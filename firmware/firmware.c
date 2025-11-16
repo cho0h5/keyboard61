@@ -1,13 +1,35 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 
+#include "bsp/board_api.h"
+#include "tusb.h"
 
 int main()
 {
-    stdio_init_all();
+    board_init();
+    tud_init(BOARD_TUD_RHPORT);
 
     while (true) {
-        printf("Hello, world!\n");
-        sleep_ms(1000);
+        tud_task();
     }
+}
+
+uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t* buffer, uint16_t reqlen)
+{
+  (void) instance;
+  (void) report_id;
+  (void) report_type;
+  (void) buffer;
+  (void) reqlen;
+
+  return 0;
+}
+
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t const* buffer, uint16_t bufsize)
+{
+  (void) instance;
+  (void) report_id;
+  (void) report_type;
+  (void) buffer;
+  (void) bufsize;
 }
