@@ -4,7 +4,7 @@
 #include "bsp/board_api.h"
 #include "tusb.h"
 
-#define HID_KEY_Z 0x1D
+#define HID_KEY_A 0x04
 #define LED_PIN PICO_DEFAULT_LED_PIN
 #define SWITCH_PIN 15
 
@@ -33,7 +33,7 @@ int main()
         // Debouncing: check if state changed and enough time has passed
         if (current_switch_state != last_switch_state && (now - last_change_time) >= 20) {
             if (tud_hid_ready()) {
-                uint8_t keycodes[6] = {current_switch_state ? HID_KEY_Z : 0, 0, 0, 0, 0, 0};
+                uint8_t keycodes[6] = {current_switch_state ? HID_KEY_A : 0, 0, 0, 0, 0, 0};
                 tud_hid_keyboard_report(0, 0, keycodes);
                 gpio_put(LED_PIN, current_switch_state);
             }
