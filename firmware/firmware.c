@@ -5,6 +5,7 @@
 #include "tusb.h"
 
 #define HID_KEY_Z 0x1D
+#define LED_PIN PICO_DEFAULT_LED_PIN
 
 void send_key(uint8_t keycode)
 {
@@ -25,6 +26,9 @@ int main()
     board_init();
     tud_init(BOARD_TUD_RHPORT);
 
+    gpio_init(LED_PIN);
+    gpio_set_dir(LED_PIN, GPIO_OUT);
+
     uint32_t last_press = 0;
 
     while (true) {
@@ -32,7 +36,10 @@ int main()
 
         uint32_t now = board_millis();
         if (now - last_press >= 2000) {
+            gpio_put(LED_PIN, 1);
             send_key(HID_KEY_Z);
+            sleep_ms(50);
+            gpio_put(LED_PIN, 0);
             last_press = now;
         }
     }
