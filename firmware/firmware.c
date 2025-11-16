@@ -6,21 +6,7 @@
 
 #define HID_KEY_Z 0x1D
 #define LED_PIN PICO_DEFAULT_LED_PIN
-
-void send_key(uint8_t keycode)
-{
-    if (!tud_hid_ready()) return;
-
-    // Key press
-    uint8_t keycodes[6] = {keycode, 0, 0, 0, 0, 0};
-    tud_hid_keyboard_report(0, 0, keycodes);
-
-    sleep_ms(10);
-
-    // Key release
-    uint8_t empty[6] = {0, 0, 0, 0, 0, 0};
-    tud_hid_keyboard_report(0, 0, empty);
-}
+#define SWITCH_PIN 15
 
 int main()
 {
@@ -30,18 +16,29 @@ int main()
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
 
-    uint32_t last_press = 0;
+    gpio_init(SWITCH_PIN);
+    gpio_set_dir(SWITCH_PIN, GPIO_IN);
+    gpio_pull_up(SWITCH_PIN);
+
+    bool last_switch_state = false;
+    uint32_t last_change_time = 0;
 
     while (true) {
         tud_task();
 
+        // Read switch state (inverted because of pull-up)
+        bool current_switch_state = !gpio_get(SWITCH_PIN);
         uint32_t now = board_millis();
-        if (now - last_press >= 2000) {
-            gpio_put(LED_PIN, 1);
-            send_key(HID_KEY_Z);
-            sleep_ms(50);
-            gpio_put(LED_PIN, 0);
-            last_press = now;
+
+        // Debouncing: check if state changed and enough time has passed
+        if (current_switch_state != last_switch_state && (now - last_change_time) >= 20) {
+            if (tud_hid_ready()) {
+                uint8_t keycodes[6] = {current_switch_state ? HID_KEY_Z : 0, 0, 0, 0, 0, 0};
+                tud_hid_keyboard_report(0, 0, keycodes);
+                gpio_put(LED_PIN, current_switch_state);
+            }
+            last_switch_state = current_switch_state;
+            last_change_time = now;
         }
     }
 }
