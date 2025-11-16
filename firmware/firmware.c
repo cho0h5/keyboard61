@@ -11,14 +11,15 @@ void send_key(uint8_t keycode)
 {
     if (!tud_hid_ready()) return;
 
-    uint8_t report[8] = {0};
-    report[2] = keycode;
-    tud_hid_keyboard_report(1, 0, report);
+    // Key press
+    uint8_t keycodes[6] = {keycode, 0, 0, 0, 0, 0};
+    tud_hid_keyboard_report(0, 0, keycodes);
 
     sleep_ms(10);
 
-    uint8_t empty_report[8] = {0};
-    tud_hid_keyboard_report(1, 0, empty_report);
+    // Key release
+    uint8_t empty[6] = {0, 0, 0, 0, 0, 0};
+    tud_hid_keyboard_report(0, 0, empty);
 }
 
 int main()
