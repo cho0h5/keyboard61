@@ -17,6 +17,15 @@
 ![Rendering 4](img/rendering4.png)
 ![Rendering 5](img/rendering5.png)
 
+## Actual Photos
+
+![Actual Photo 1](img/real1.jpeg)
+![Actual Photo 2](img/real2.jpeg)
+![Actual Photo 3](img/real3.jpeg)
+![Actual Photo 4](img/real4.jpeg)
+![Actual Photo 5](img/real5.jpeg)
+![Actual Photo 6](img/real6.jpeg)
+
 ### 3D Models Used
 - Cherry MX Switch: [ConstantinoSchillebeeckx/cherry-mx-switch](https://github.com/ConstantinoSchillebeeckx/cherry-mx-switch)
 - DSA Keycap: [anhthang/dsa-keycap](https://github.com/anhthang/dsa-keycap)
