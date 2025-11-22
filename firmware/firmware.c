@@ -176,13 +176,15 @@ bool is_fn_pressed(void)
     return fn_pressed;
 }
 
-// Scan matrix and return pressed keycode (0 if no key pressed)
+// Scan matrix and collect all pressed keys
 // 회로도: ROW -> 다이오드 -> 스위치 -> COLUMN
 // 스캔 방식: ROW를 LOW로 설정하고 COLUMN을 읽음
-uint8_t scan_matrix(void)
+// Returns number of keys pressed
+uint8_t scan_matrix(uint8_t* keycodes, uint8_t max_keys)
 {
     bool fn_active = is_fn_pressed();
     const uint8_t (*active_keymap)[NUM_COLS] = fn_active ? fn_keymap : keymap;
+    uint8_t key_count = 0;
 
     for (int row = 0; row < NUM_ROWS; row++) {
         // Set current row LOW
@@ -195,15 +197,14 @@ uint8_t scan_matrix(void)
 
             if (is_pressed) {
                 uint8_t keycode = active_keymap[row][col];
-                // Set current row back to HIGH before returning
-                gpio_put(row_pins[row], 1);
 
-                // Don't return FN key itself
-                if (keycode == HID_KEY_FN) {
-                    continue;
+                // Don't add FN key or NONE key
+                if (keycode != HID_KEY_FN && keycode != HID_KEY_NONE) {
+                    // Add to array if there's space
+                    if (key_count < max_keys) {
+                        keycodes[key_count++] = keycode;
+                    }
                 }
-
-                return keycode;
             }
         }
 
@@ -211,7 +212,7 @@ uint8_t scan_matrix(void)
         gpio_put(row_pins[row], 1);
     }
 
-    return 0;  // No key pressed
+    return key_count;
 }
 
 int main()
@@ -243,17 +244,15 @@ int main()
         tud_task();
 
         uint32_t now = board_millis();
-        uint8_t pressed_keycode = scan_matrix();
 
         // Debouncing and sending HID report
         if ((now - last_change_time) >= 20) {
             if (tud_hid_ready()) {
                 uint8_t keycodes[6] = {0};
-                if (pressed_keycode != 0) {
-                    keycodes[0] = pressed_keycode;
-                }
+                uint8_t key_count = scan_matrix(keycodes, 6);
+
                 tud_hid_keyboard_report(0, 0, keycodes);
-                gpio_put(LED_PIN, pressed_keycode != 0);
+                gpio_put(LED_PIN, key_count > 0);
             }
             last_change_time = now;
         }
