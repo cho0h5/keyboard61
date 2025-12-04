@@ -3,6 +3,8 @@
 
 #include "bsp/board_api.h"
 #include "tusb.h"
+#include "hardware/watchdog.h"
+#include "hardware/structs/scb.h"
 
 // HID Keycodes - Standard US Keyboard Layout
 #define HID_KEY_NONE        0x00
@@ -128,6 +130,10 @@
 const uint8_t row_pins[NUM_ROWS] = {ROW1_PIN, ROW2_PIN, ROW3_PIN, ROW4_PIN, ROW5_PIN};
 const uint8_t col_pins[NUM_COLS] = {COL1_PIN, COL2_PIN, COL3_PIN, COL4_PIN, COL5_PIN, COL6_PIN, COL7_PIN, COL8_PIN, COL9_PIN, COL10_PIN, COL11_PIN, COL12_PIN, COL13_PIN, COL14_PIN};
 
+#define FN_ROW 4
+#define FN_COL 0
+#define MAX_MATRIX_KEYS (NUM_ROWS * NUM_COLS)
+
 // Keymap: [row][col] - Standard 60% keyboard layout
 // Columns: C1(GPIO5), C2(GPIO6), C3(GPIO7), C4(GPIO8), C5(GPIO9), C6(GPIO10), C7(GPIO11), C8(GPIO12), C9(GPIO13), C10(GPIO14), C11(GPIO15), C12(GPIO16), C13(GPIO17), C14(GPIO18)
 const uint8_t keymap[NUM_ROWS][NUM_COLS] = {
@@ -165,16 +171,10 @@ const uint8_t fn_keymap[NUM_ROWS][NUM_COLS] = {
     {HID_KEY_FN, HID_KEY_GUI_LEFT, HID_KEY_ALT_LEFT, HID_KEY_NONE, HID_KEY_NONE, HID_KEY_SPACE, HID_KEY_NONE, HID_KEY_NONE, HID_KEY_NONE, HID_KEY_NONE, HID_KEY_ARROW_LEFT, HID_KEY_ARROW_DOWN, HID_KEY_ARROW_UP, HID_KEY_ARROW_RIGHT}
 };
 
-// Check if FN key is pressed
-bool is_fn_pressed(void)
-{
-    // FN key is at Row 5 (index 4), Column 1 (index 0)
-    gpio_put(row_pins[4], 0);  // Set Row 5 LOW
-    sleep_us(1);
-    bool fn_pressed = !gpio_get(col_pins[0]);  // Check Column 1
-    gpio_put(row_pins[4], 1);  // Set Row 5 back to HIGH
-    return fn_pressed;
-}
+typedef struct {
+    uint8_t row;
+    uint8_t col;
+} key_pos_t;
 
 // Scan matrix and collect all pressed keys
 // 회로도: ROW -> 다이오드 -> 스위치 -> COLUMN
@@ -182,28 +182,28 @@ bool is_fn_pressed(void)
 // Returns number of keys pressed
 uint8_t scan_matrix(uint8_t* keycodes, uint8_t max_keys)
 {
-    bool fn_active = is_fn_pressed();
-    const uint8_t (*active_keymap)[NUM_COLS] = fn_active ? fn_keymap : keymap;
-    uint8_t key_count = 0;
+    key_pos_t pressed[MAX_MATRIX_KEYS];
+    uint8_t pressed_count = 0;
+    bool fn_active = false;
 
     for (int row = 0; row < NUM_ROWS; row++) {
         // Set current row LOW
         gpio_put(row_pins[row], 0);
-        sleep_us(1);  // Small delay for signal to stabilize
+        sleep_us(5);  // Allow RC network to settle before reading
 
         // Read all columns
         for (int col = 0; col < NUM_COLS; col++) {
             bool is_pressed = !gpio_get(col_pins[col]);  // LOW = pressed
 
             if (is_pressed) {
-                uint8_t keycode = active_keymap[row][col];
+                if (row == FN_ROW && col == FN_COL) {
+                    fn_active = true;
+                }
 
-                // Don't add FN key or NONE key
-                if (keycode != HID_KEY_FN && keycode != HID_KEY_NONE) {
-                    // Add to array if there's space
-                    if (key_count < max_keys) {
-                        keycodes[key_count++] = keycode;
-                    }
+                if (pressed_count < MAX_MATRIX_KEYS) {
+                    pressed[pressed_count].row = (uint8_t)row;
+                    pressed[pressed_count].col = (uint8_t)col;
+                    pressed_count++;
                 }
             }
         }
@@ -212,12 +212,63 @@ uint8_t scan_matrix(uint8_t* keycodes, uint8_t max_keys)
         gpio_put(row_pins[row], 1);
     }
 
+    const uint8_t (*active_keymap)[NUM_COLS] = fn_active ? fn_keymap : keymap;
+    uint8_t key_count = 0;
+
+    for (uint8_t i = 0; i < pressed_count && key_count < max_keys; i++) {
+        uint8_t keycode = active_keymap[pressed[i].row][pressed[i].col];
+
+        // Don't add FN key or NONE key
+        if (keycode != HID_KEY_FN && keycode != HID_KEY_NONE) {
+            keycodes[key_count++] = keycode;
+        }
+    }
+
     return key_count;
+}
+
+// Simple CDC handler to echo incoming data (useful for bootloader/debug hooks)
+static void process_cdc(void)
+{
+    uint8_t buf[64];
+    uint32_t count = tud_cdc_available() ? tud_cdc_read(buf, sizeof(buf)) : 0;
+    static char line[64];
+    static size_t line_len = 0;
+
+    for (uint32_t i = 0; i < count; i++) {
+        char c = (char)buf[i];
+        if (c == '\r') continue;
+        if (c == '\n') {
+            line[line_len] = '\0';
+            if (strcmp(line, "BOOTLOADER") == 0) {
+                tud_cdc_write_str("RESET\n");
+                tud_cdc_write_flush();
+                for (int i = 0; i < 10; i++) { 
+                    tud_task();
+                    sleep_ms(2);
+                }
+                watchdog_reboot(0, 0, 0);
+                while (1) { }
+            } else {
+                tud_cdc_write_str(line);
+                tud_cdc_write_str("\n");
+                tud_cdc_write_flush();
+            }
+            line_len = 0;
+        } else {
+            if (line_len + 1 < sizeof(line)) {
+                line[line_len++] = c;
+            } else {
+                line_len = 0; // overflow, reset buffer
+            }
+        }
+    }
 }
 
 int main()
 {
     board_init();
+    __asm volatile ("cpsie i"); // bootloader leaves interrupts masked; enable here
     tud_init(BOARD_TUD_RHPORT);
 
     // Initialize LED
@@ -242,6 +293,7 @@ int main()
 
     while (true) {
         tud_task();
+        process_cdc();
 
         uint32_t now = board_millis();
 

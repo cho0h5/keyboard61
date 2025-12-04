@@ -1,2 +1,5 @@
 .vscode/
 build/
+build_fw/
+build_boot/
+.venv/
