@@ -22,7 +22,6 @@ BAUDRATE = 115200  # CDC ignores baud, but pyserial needs a value
 WRITE_CHUNK = 256  # match flash page size to avoid overflow on device
 READ_TIMEOUT = 1.0
 CMD_TIMEOUT = 5.0
-MAGIC_LINE = "MAGIC"
 
 
 def list_serial_ports():
@@ -50,79 +49,83 @@ class BootloaderClient:
         if self.ser:
             self.ser.close()
 
+    def _write_all(self, data: bytes, desc: str = "") -> int:
+        total = 0
+        length = len(data)
+        while total < length:
+            n = self.ser.write(data[total:])
+            if n is None:
+                n = 0
+            if n == 0:
+                raise RuntimeError(
+                    f"Serial write returned 0 bytes while sending {desc} "
+                    f"({total}/{length})"
+                )
+            total += n
+        self.ser.flush()
+        # if desc:
+        #     self.log(f"Host wrote {total}/{length} bytes ({desc})")
+        return total
+
     def _read_line(self, timeout=CMD_TIMEOUT):
         end_time = time.time() + timeout
         buf = bytearray()
-        while time.time() < end_time:
+        while True:
+            if time.time() >= end_time:
+                return None
+
             try:
                 b = self.ser.read(1)
-            except (serial.SerialException, OSError) as e:
-                # Bubble up for caller to decide
-                raise e
+            except (serial.SerialException, OSError):
+                raise
+
             if b:
                 buf += b
                 if b == b"\n":
-                    break
+                    return buf.decode(errors="replace").rstrip("\r\n")
             else:
-                time.sleep(0.01)
-        if not buf:
-            return None
-        line = buf.decode(errors="replace").strip()
-        return line
+                time.sleep(0.005)
 
     def _send_line(self, line: str):
-        self.ser.write(line.encode("ascii"))
-        self.ser.flush()
+        b = line.encode("ascii")
+        self._write_all(b, desc=f"LINE '{line.strip()}'")
 
     def _expect_ok(self, timeout=CMD_TIMEOUT, allow_disconnect=False):
         deadline = time.time() + timeout
         while time.time() < deadline:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
             try:
-                line = self._read_line(timeout=0.5)
-            except (serial.SerialException, OSError) as e:
+                line = self._read_line(timeout=remaining)
+            except (serial.SerialException, OSError):
                 if allow_disconnect:
                     return
                 raise
+
             if line is None:
                 continue
             if line.startswith("OK"):
                 return
             if line.startswith("ERR"):
                 raise RuntimeError(line)
-            # Otherwise it's a log line; keep waiting for OK/ERR.
+
+            # 나머지는 그냥 로그/디버그 라인으로 취급 (무시)
         raise RuntimeError("No OK response")
 
-    def _drain_magic(self, timeout=5.0):
-        end_time = time.time() + timeout
-        while time.time() < end_time:
-            line = self._read_line(timeout=0.5)
-            if not line:
-                continue
-            if line == MAGIC_LINE:
-                self.log("Magic packet received")
-                return True
-        return False
-
     def handshake(self):
-        self._drain_magic(timeout=5.0)
         self._send_line("PING\n")
-        deadline = time.time() + CMD_TIMEOUT
+        deadline = time.time() + 1.0  # quick probe; if no PONG, we'll reboot to bootloader
         while time.time() < deadline:
             resp = self._read_line(timeout=0.5)
             if resp is None:
-                continue
-            if resp == MAGIC_LINE:
                 continue
             if resp == "PING":  # firmware echo; ignore and keep waiting
                 continue
             if resp == "PONG":
                 self.log("Connected (PONG)")
                 return
-            # Some devices reply OK to ping; accept that as well
-            if resp.startswith("OK"):
-                self.log("Connected (OK)")
-                return
-            raise RuntimeError(f"Unexpected response: {resp}")
+            #raise RuntimeError(f"Unexpected response: {resp}")
         raise RuntimeError("Handshake timeout")
 
     def try_handshake(self, retries: int = 1, delay: float = 0.2) -> bool:
@@ -219,21 +222,29 @@ class BootloaderClient:
         self.log(f"Erase OK (len=0x{length:X})")
 
     def write_chunk(self, offset: int, data: bytes):
-        self._send_line(f"WRITE 0x{offset:X} 0x{len(data):X}\n")
-        # raw payload immediately after the command
-        self.ser.write(data)
-        self.ser.flush()
-        self._expect_ok()
-
+        for attempt in range(3):
+            try:
+                hex_payload = data.hex().upper().encode("ascii")
+                header = f"WRITE 0x{offset:X} 0x{len(data):X}\n".encode("ascii")
+                packet = header + hex_payload + b"\n"
+                self._write_all(packet, desc=f"WRITE off=0x{offset:X} len=0x{len(data):X}")
+                # 빠른 응답이 없으면 재전송 (500ms)
+                self._expect_ok(timeout=0.3)
+                return
+            except Exception as e:
+                self.log(f"WRITE retry {attempt+1}/3 failed: {e}")
+                try:
+                    self.ser.reset_input_buffer()
+                except Exception:
+                    pass
+                time.sleep(0.05)
+        raise RuntimeError("No OK after retries")
+        
     def finalize(self, total_len: int, crc_val: int):
         self._send_line(f"DONE 0x{total_len:X} 0x{crc_val:X}\n")
         # Device will reset after DONE; allow disconnect.
         self._expect_ok(timeout=15.0, allow_disconnect=True)
         self.log("Finalize OK")
-
-    def boot(self):
-        self._send_line("BOOT\n")
-        # bootloader may jump away; ignore response
 
     def program(self, filepath: str, progress_cb):
         with open(filepath, "rb") as f:
@@ -249,14 +260,13 @@ class BootloaderClient:
             if not self.connect_to_bootloader(self.port, timeout=6.0):
                 raise RuntimeError("Failed to handshake after reboot")
 
-        self.erase(total_len)
-
         offset = 0
         while offset < total_len:
             chunk = data[offset : offset + WRITE_CHUNK]
             self.write_chunk(offset, chunk)
             offset += len(chunk)
             progress_cb(offset, total_len)
+            time.sleep(0.01)
 
         self.finalize(total_len, crc_val)
         self.log("Done.")
@@ -284,15 +294,18 @@ class App:
         ttk.Label(frm, text="Port").grid(row=row, column=0, sticky="w", **pad)
         self.port_combo = ttk.Combobox(frm, textvariable=self.port_var, width=25, state="readonly")
         self.port_combo.grid(row=row, column=1, **pad)
-        ttk.Button(frm, text="Refresh", command=self.refresh_ports).grid(row=row, column=2, **pad)
+        self.refresh_btn = ttk.Button(frm, text="Refresh", command=self.refresh_ports)
+        self.refresh_btn.grid(row=row, column=2, **pad)
 
         row += 1
         ttk.Label(frm, text="Binary").grid(row=row, column=0, sticky="w", **pad)
         ttk.Entry(frm, textvariable=self.file_var, width=40).grid(row=row, column=1, **pad)
-        ttk.Button(frm, text="Browse", command=self.choose_file).grid(row=row, column=2, **pad)
+        self.browse_btn = ttk.Button(frm, text="Browse", command=self.choose_file)
+        self.browse_btn.grid(row=row, column=2, **pad)
 
         row += 1
-        ttk.Button(frm, text="Flash", command=self.start_flash).grid(row=row, column=0, columnspan=3, sticky="we", **pad)
+        self.flash_btn = ttk.Button(frm, text="Flash", command=self.start_flash)
+        self.flash_btn.grid(row=row, column=0, columnspan=3, sticky="we", **pad)
 
         row += 1
         self.log_widget = Text(frm, height=12, width=70, state=DISABLED)
@@ -301,10 +314,12 @@ class App:
         frm.columnconfigure(1, weight=1)
 
     def log(self, msg):
-        self.log_widget.configure(state=NORMAL)
-        self.log_widget.insert(END, msg + "\n")
-        self.log_widget.see(END)
-        self.log_widget.configure(state=DISABLED)
+        def _append():
+            self.log_widget.configure(state=NORMAL)
+            self.log_widget.insert(END, msg + "\n")
+            self.log_widget.see(END)
+            self.log_widget.configure(state=DISABLED)
+        self.root.after(0, _append)
 
     def refresh_ports(self):
         ports = list_serial_ports()
@@ -319,8 +334,11 @@ class App:
 
     def set_widgets_state(self, enabled: bool):
         state = NORMAL if enabled else DISABLED
-        for widget in (self.port_combo,):
-            widget.configure(state="readonly" if enabled else DISABLED)
+        # port combo
+        self.port_combo.configure(state="readonly" if enabled else DISABLED)
+        # buttons
+        for btn in (self.refresh_btn, self.browse_btn, self.flash_btn):
+            btn.configure(state=state)
 
     def start_flash(self):
         port = self.port_var.get()
